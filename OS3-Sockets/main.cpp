@@ -96,22 +96,6 @@ bool sendAck(uint16_t receivedBlock, int socket, struct sockaddr_in &ClntAddr, i
     return true;
 }
 
-//@input: port, timeout, maxfail       >0
-//
-//size < unsignedshort
-//
-//Port > 10000
-//Is port free?
-//
-//maxSize=1500bytes
-
-
-/*
- *@
- *
- */
-
-
 int main(int argc, const char * argv[]) {
     checkArguments(argc, argv);
     int select_res = 0;
@@ -136,13 +120,17 @@ int main(int argc, const char * argv[]) {
     
     
 
-    if( bind(serverSocket, (struct sockaddr *) &echoServAddr , sizeof(echoServAddr)) < 0){
+    if( (bind(serverSocket, (struct sockaddr *) &echoServAddr , sizeof(echoServAddr)) ) < 0){
         perror("TTFTP_ERROR:"); // ? should we specifr errors? or let perror do it
         exit(1);
     }
     
     
     ssize_t recvMsgSize;
+    int fdFile;
+    ssize_t writtenBytes;
+    uint16_t expectedBlock=0;
+    uint16_t receivedBlock = 0;
     
     while(1){
         socklen_t clntSockSize= sizeof(echoClntAddr);
@@ -162,23 +150,29 @@ int main(int argc, const char * argv[]) {
             continue;
         }
         string fileName = &echoBuffer[2];
-        if (fileName.size() == 0){
+        if (fileName.size() == 0){ //?
             // MARK - not given a fileName
             cerr << "TTFTP_ERROR:" << endl; // ? should we specifr errors? or let perror do it
             continue;
         }
+        
+        if (fileName[0] != '/'){
+            //
+            cerr << "TTFTP_ERROR:" << endl; // ? should we specifr errors? or let perror do it
+
+        }
+        
         string mode = &echoBuffer[2 + fileName.length() + 1];
         if (mode != octet){
             cerr << "TTFTP_ERROR:" << endl; // ? should we specifr errors? or let perror do it
             continue;
         }
-        
-        int fdFile;
-        ssize_t writtenBytes;
-        const char* filePath= "/Users/er/Mcode/OS3-Sockets/OS3-Sockets/a.txt"; //string.c_str()
+        char* filePath;
+        strcpy(filePath, fileName.c_str() );
+        //const char* filePath= "/Users/er/Mcode/OS3-Sockets/OS3-Sockets/a.txt"; //string.c_str()
         fdFile=open(filePath, O_RDONLY);
         
-        if (fdFile == -1){ // file doesn't exist :)
+        if (fdFile == -1){ // file doesn't exist :-)
             fdFile = open(filePath, O_CREAT|O_WRONLY);
             if (fdFile == -1){
                 //cannot create file
@@ -189,11 +183,7 @@ int main(int argc, const char * argv[]) {
             // already exists!!
             exit(1);
         }
-        
-        
-        uint16_t expectedBlock=0;
-        uint16_t receivedBlock = 0;
-        
+
         if (sendAck(receivedBlock, serverSocket, echoClntAddr, clntSockSize) != true){
             // ERROR CANT SEND ACK
             if (close(fdFile) == -1){
@@ -201,9 +191,6 @@ int main(int argc, const char * argv[]) {
             }
             exit(1);
         }
-        
-        
-        
         
         do{//doExternal
             do{//doInternal
@@ -266,8 +253,7 @@ int main(int argc, const char * argv[]) {
                 // some error FATAL??
                 cerr << " NOT THE RIGHT BLOCK" << endl;
             }
-            
-            //sendAck(receivedBlock, serverSocket, echoClntAddr, clntSockSize, &readFile);
+        
             if (sendAck(receivedBlock, serverSocket, echoClntAddr, clntSockSize) != true){
                 // ERROR CANT SEND ACK
                 if (close(fdFile) == -1){
@@ -276,7 +262,6 @@ int main(int argc, const char * argv[]) {
                 exit(1);
             }
             
-
             long dataNeto = recvMsgSize - HEADER;
             if (dataNeto > 0){
                 writtenBytes = write(fdFile, &echoBuffer[HEADER], dataNeto);
@@ -286,28 +271,15 @@ int main(int argc, const char * argv[]) {
                 }
             }
             
-            
-            
-            //lastWriteSize = fwrite(...); // write next bulk of data
-            // TODO: send ACK packet to the client
         }while (recvMsgSize==ECHOMAX); //doExternal
         // Have blocks left to be read from client (not end of transmission)
         
-    
-        
+        if (close(fdFile) == -1){
+            //ERROR CANT CLOSE FILE
+            exit(1);
+        }
         
     }//while(1)
     
     return 0;
 }
-
-
-
-    // we will have for?? to run on a few c
-    /*
-     for (int fd= minFD; fd<maxFD; fd++){
-         if (FD_ISSET(fd, &writeFD)){
-             printf("handle request");
-         }
-     }
-     */
