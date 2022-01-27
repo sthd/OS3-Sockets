@@ -6,6 +6,8 @@
 //
 
 #include <iostream>
+//#include <stdio.h>
+#include <stdlib.h>
 #include <fstream>
 #include <string.h>
 #include <cstring>
@@ -36,6 +38,15 @@ struct ack{
     uint16_t blockNum;  //2 bytes
 
 } __attribute__((packed));
+
+struct error{
+    uint16_t opcode;    //2 bytes
+    uint16_t ErrorCode; //2 bytes
+    string errMsg;
+    uint8_t zero;       //1 byte
+    
+} __attribute__((packed));
+
 
 struct data{
     uint16_t opcode;    //2 bytes
@@ -89,14 +100,18 @@ void checkArguments(int argc, const char * argv[]){
     }
 }
 
-bool sendAck(uint16_t receivedBlock, int socket, struct sockaddr_in &ClntAddr, int ClntAddrLen){
-    ack tmpAck;
-    memset(&tmpAck, 0, sizeof(ack));
-    tmpAck.opcode = htons(ACK_OPCODE);
-    tmpAck.blockNum =htons(receivedBlock);
-    if ( sendto(socket, &tmpAck, 4, 0, (struct sockaddr*) &ClntAddr, ClntAddrLen) < 0)
-        return false;
-    return true;
+void sendError(int err, string msgError, int serverSocket, struct sockaddr* echoClntAddr, int clntAddrLen){
+    struct error errorPacket;
+    errorPacket.opcode=htons(5);
+    errorPacket.errMsg=msgError;
+    errorPacket.ErrorCode=htons(err);
+    errorPacket.zero=0;
+    
+    
+    if ( (sendto(serverSocket, (void*)&errorPacket, sizeof(errorPacket), 0, (struct sockaddr*) &echoClntAddr, clntAddrLen)) < 0){
+        perror("TTFTP_ERROR:");
+        exit(1);
+    }
 }
 
 int main(int argc, const char * argv[]) {
@@ -111,23 +126,22 @@ int main(int argc, const char * argv[]) {
     
     
     
-    struct sockaddr_in echoServAddr;
-    struct sockaddr_in echoClntAddr; //name
+    struct sockaddr_in echoServAddr={0};
+    struct sockaddr_in echoClntAddr={0}; //name
     
     //struct hostent *server = gethostbyname(argv[1]);
     
-    memset(&echoServAddr, 0, sizeof(echoServAddr));
+    //memset(&echoServAddr, 0, sizeof(echoServAddr));
     echoServAddr.sin_family = AF_INET;
-    echoServAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    echoServAddr.sin_addr.s_addr = INADDR_ANY; ///
     echoServAddr.sin_port = htons(echoServPort);
-    
     
 
     if( (bind(serverSocket, (struct sockaddr *) &echoServAddr , sizeof(echoServAddr)) ) < 0){
-        perror("TTFTP_ERROR:"); // ? should we specifr errors? or let perror do it
+    close(serverSocket);
+    perror("TTFTP_ERROR:"); // ? should we specifr errors? or let perror do it
         exit(1);
     }
-    
     
     ssize_t recvMsgSize;
     int fdFile;
@@ -135,39 +149,49 @@ int main(int argc, const char * argv[]) {
     uint16_t expectedBlock=0;
     uint16_t receivedBlock = 0;
     
+    //tmpAck = (struct ack*)malloc(sizeof(struct ack));
+    //if (tmpAck!=NULL){
+    //    cout << "NOT NULL" << endl;
+    //    cout << tmpAck << endl;
+    //}
+    
+    struct ack tmpAck;
+
     while(1){
-        socklen_t clntSockSize= sizeof(echoClntAddr);
-        recvMsgSize= recvfrom(serverSocket, echoBuffer, ECHOMAX, 0, (struct sockaddr *)&echoClntAddr, &clntSockSize);
+        bool illegalWRQ=false;
+        socklen_t clntAddrLen= sizeof(echoClntAddr);
+        recvMsgSize= recvfrom(serverSocket, echoBuffer, ECHOMAX, 0, (struct sockaddr *)&echoClntAddr, &clntAddrLen);
         if (!(recvMsgSize > 0)){
             if (recvMsgSize == 0)
                 continue;
             else{
-                perror("TTFTP_ERROR: 1"); // ? should we specifr errors? or let perror do it
+                perror("TTFTP_ERROR:");
                 exit(1);
             }
         }
         
         int opcode = ntohs(*(uint16_t*) &echoBuffer);
         if (opcode != WRQ_OPCODE){
-            cerr << "TTFTP_ERROR: 2        " << endl; // ? should we specifr errors? or let perror do it
+            string msgError="Unknown user";
+            sendError(7, msgError, serverSocket, (struct sockaddr *)&echoClntAddr, clntAddrLen);
             continue;
         }
         string fileName = &echoBuffer[2];
         if (fileName.size() == 0){ //?
-            // MARK - not given a fileName
-            cerr << "TTFTP_ERROR: 3" << endl; // ? should we specifr errors? or let perror do it
-            continue;
+            illegalWRQ=true;
         }
         
-        if (fileName[0] != '/'){
-            //
-            cerr << "TTFTP_ERROR: 4" << endl; // ? should we specifr errors? or let perror do it
-
+        if (fileName[0] != '/'){ /// @@@ illegal name
+            illegalWRQ=true;
         }
         
         string mode = &echoBuffer[2 + fileName.length() + 1];
         if (mode != octet){
-            cerr << "TTFTP_ERROR: 5" << endl; // ? should we specifr errors? or let perror do it
+            illegalWRQ=true;
+        }
+        if (illegalWRQ){
+            string msgError="Illegal WRQ";
+            sendError(4, msgError, serverSocket, (struct sockaddr *)&echoClntAddr, clntAddrLen);
             continue;
         }
         //char* filePath=NULL;
@@ -176,6 +200,7 @@ int main(int argc, const char * argv[]) {
     cout << "I just strcpy" << endl;
     //filePath[fileName.length()]='\0';
         //const char* filePath= "/Users/er/Mcode/OS3-Sockets/OS3-Sockets/a.txt"; //string.c_str()
+        
         fdFile=open(fileName.c_str(), O_RDONLY);
   
         if (fdFile == -1){ // file doesn't exist :-)
@@ -187,20 +212,25 @@ int main(int argc, const char * argv[]) {
             }
         }
         else{
-            // already exists!!
-        cerr << "TTFTP_ERROR: 7" << endl;
-        if (close(fdFile) == -1){
-                    //ERROR CANT CLOSE FILE
-             cerr << "TTFTP_ERROR: 5B" << endl;
-                }
-              exit(1);
+            string msgError="File already exists";
+            sendError(6, msgError, serverSocket, (struct sockaddr *)&echoClntAddr, clntAddrLen);
+            
+            if (close(fdFile) == -1){
+                //ERROR CANT CLOSE FILE
+                perror("TTFTP_ERROR: 5B");
+            }
+            exit(1);
         }
 
-        if (sendAck(receivedBlock, serverSocket, echoClntAddr, clntSockSize) != true){
+    memset(&tmpAck, 0, sizeof(ack));
+    tmpAck.opcode = htons(ACK_OPCODE);
+    tmpAck.blockNum =htons(receivedBlock);
+    cout << sizeof(tmpAck) << " is pointer size" << endl;
+       if ( sendto(serverSocket, (void*)&tmpAck, sizeof(tmpAck), 0, (struct sockaddr*) &echoClntAddr, clntAddrLen) < 0){
             // ERROR CANT SEND ACK
             if (close(fdFile) == -1){
                 //ERROR CANT CLOSE FILE
-         cerr << "TTFTP_ERROR: 8" << endl;
+                cerr << "TTFTP_ERROR: 8" << endl;
             }
             exit(1);
         }
@@ -230,7 +260,13 @@ int main(int argc, const char * argv[]) {
                 
                 if (select_res==0){
                     timeoutExpiredCount++;
-                    if (sendAck(receivedBlock, serverSocket, echoClntAddr, clntSockSize) != true){
+
+             memset(&tmpAck, 0, sizeof(ack));
+                tmpAck.opcode = htons(ACK_OPCODE);
+                tmpAck.blockNum =htons(expectedBlock);
+            cout << sizeof(tmpAck) << " is pointer size" << endl;
+    
+               if ( sendto(serverSocket, (void*)&tmpAck, sizeof(tmpAck), 0, (struct sockaddr*) &echoClntAddr, clntAddrLen) < 0){
                         // ERROR CANT SEND ACK
              cerr << "TTFTP_ERROR: 10" << endl;
                         if (close(fdFile) == -1){
@@ -240,9 +276,8 @@ int main(int argc, const char * argv[]) {
                         exit(1);
                     }
                     if (timeoutExpiredCount > allowedFailures){
-                        cerr << "Abandoning file transmission" << endl;
-                        // @@@
-
+                        string msgError="Abandoning file transmission";
+                        sendError(4, msgError, serverSocket, (struct sockaddr *)&echoClntAddr, clntAddrLen);
                     }
                 }
                 
@@ -251,7 +286,7 @@ int main(int argc, const char * argv[]) {
             timeoutExpiredCount = 0;
             expectedBlock++;
         
-            if( (recvMsgSize=recvfrom(serverSocket, echoBuffer, ECHOMAX, 0, (struct sockaddr*) &echoClntAddr, &clntSockSize)) < 0 ){
+            if( (recvMsgSize=recvfrom(serverSocket, echoBuffer, ECHOMAX, 0, (struct sockaddr*) &echoClntAddr, &clntAddrLen)) < 0 ){
                 perror("");
                 if (close(fdFile) == -1){
                     //ERROR CANT CLOSE FILE
@@ -262,17 +297,29 @@ int main(int argc, const char * argv[]) {
             
             opcode=ntohs(*(uint16_t*)echoBuffer);
             if (opcode != DATA_OPCODE){
-                cerr << "Illegal TFTP operation" << endl;
+                string msgError;
+                if (opcode== WRQ_OPCODE)
+                    msgError="Unexpected packet";
+                else
+                    msgError="Illegal TFTP operation";
+                sendError(4, msgError, serverSocket, (struct sockaddr *)&echoClntAddr, clntAddrLen);
             }
             
             //char opy[16]=echo[16] .. echo[31] ???
             memcpy((void*)&receivedBlock,(const void*)&echoBuffer[2], sizeof(receivedBlock) );
+            receivedBlock=ntohs(receivedBlock);
             if (expectedBlock != receivedBlock){
-                // some error FATAL??
-                cerr << " NOT THE RIGHT BLOCK" << endl;
+                string msgError="Bad block number";
+                sendError(0, msgError, serverSocket, (struct sockaddr *)&echoClntAddr, clntAddrLen);
+                exit(1);
             }
         
-            if (sendAck(receivedBlock, serverSocket, echoClntAddr, clntSockSize) != true){
+            memset(&tmpAck, 0, sizeof(ack));
+            tmpAck.opcode = htons(ACK_OPCODE);
+            tmpAck.blockNum =htons(expectedBlock);
+            cout << sizeof(tmpAck) << " is pointer size" << endl;
+    
+               if ( sendto(serverSocket, (void*)&tmpAck, sizeof(tmpAck), 0, (struct sockaddr*) &echoClntAddr, clntAddrLen) < 0){
                 // ERROR CANT SEND ACK
                 if (close(fdFile) == -1){
                     //ERROR CANT CLOSE FILE
@@ -301,6 +348,6 @@ int main(int argc, const char * argv[]) {
         }
         //delete [] filePath;
     }//while(1)
-    
+//    free(tmpAck);
     return 0;
 }
